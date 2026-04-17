@@ -255,14 +255,25 @@ def filter_valid_agg_states(utxos: Sequence[UTxO], current_time: int) -> list[UT
 
 
 def find_account_pair(
-    utxos: Sequence[UTxO], policy_id: ScriptHash, current_time: int
+    utxos: Sequence[UTxO],
+    policy_id: ScriptHash,
+    current_time: int,
+    aggstate_asset_name: str = "C3AS",
 ) -> tuple[UTxO, UTxO]:
     """Find empty transport and agg state pair (empty or expired).
+
+    Multi-feed support (D-05 fork): `aggstate_asset_name` selects the
+    specific AggState token under `policy_id`. Vanilla single-feed flows
+    keep the default "C3AS"; multi-feed flows pass e.g. "C3AS_inventory"
+    or "C3AS_price" to disambiguate between AggState UTxOs sharing the
+    same policy.
 
     Args:
         utxos: List of UTxOs to search
         policy_id: Policy ID for filtering tokens
         current_time: Current time for checking expiry
+        aggstate_asset_name: Exact asset name of the target AggState token
+            (defaults to "C3AS" for backward-compat)
 
     Returns:
         Tuple of (transport UTxO, agg state UTxO)
@@ -278,13 +289,17 @@ def find_account_pair(
         if not reward_accounts:
             raise StateValidationError("No Reward Account UTxOs found")
 
-        # Find empty or expired agg states
+        # Find empty or expired agg states for the requested feed
         agg_states = filter_valid_agg_states(
-            asset_checks.filter_utxos_by_token_name(utxos, policy_id, "C3AS"),
+            asset_checks.filter_utxos_by_token_name(
+                utxos, policy_id, aggstate_asset_name
+            ),
             current_time,
         )
         if not agg_states:
-            raise StateValidationError("No valid agg state UTxO found")
+            raise StateValidationError(
+                f"No valid agg state UTxO found for asset '{aggstate_asset_name}'"
+            )
 
         # Return first pair found
         return reward_accounts[0], agg_states[0]

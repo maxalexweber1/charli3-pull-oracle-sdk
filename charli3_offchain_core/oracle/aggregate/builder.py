@@ -74,6 +74,7 @@ class OracleTransactionBuilder:
         ref_script_config: ReferenceScriptConfig,
         reward_token_hash: ScriptHash | None = None,
         reward_token_name: AssetName | None = None,
+        aggstate_asset_name: str = "C3AS",
     ) -> None:
         """Initialize transaction builder.
 
@@ -81,6 +82,9 @@ class OracleTransactionBuilder:
             tx_manager: Transaction manager
             script_address: Script address
             policy_id: Policy ID for tokens
+            aggstate_asset_name: Target AggState asset name for multi-feed
+                oracles (D-05 fork). Defaults to "C3AS" for vanilla
+                single-feed deployments.
         """
         self.tx_manager = tx_manager
         self.script_address = script_address
@@ -88,6 +92,7 @@ class OracleTransactionBuilder:
         self.ref_script_config = ref_script_config
         self.reward_token_hash = reward_token_hash
         self.reward_token_name = reward_token_name
+        self.aggstate_asset_name = aggstate_asset_name
         self.network_config = self.tx_manager.chain_query.config.network_config
 
     async def build_odv_tx(
@@ -168,7 +173,10 @@ class OracleTransactionBuilder:
             )
 
             account, agg_state = state_checks.find_account_pair(
-                utxos, self.policy_id, current_time
+                utxos,
+                self.policy_id,
+                current_time,
+                aggstate_asset_name=self.aggstate_asset_name,
             )
 
             # Don't re-sort! message.node_feeds_sorted_by_feed is already correctly
