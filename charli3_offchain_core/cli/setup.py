@@ -180,6 +180,7 @@ def setup_oracle_from_config(
             network=deployment_config.network.network,
             reward_count=deployment_config.reward_count,
             aggstate_count=deployment_config.aggstate_count,
+            aggstate_asset_suffixes=deployment_config.aggstate_asset_suffixes,
         ),
         "rate_token": FeeConfig(
             rate_nft=rate_token,

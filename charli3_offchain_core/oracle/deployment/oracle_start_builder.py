@@ -199,16 +199,31 @@ class OracleStartBuilder:
             )
             for _ in range(deployment_config.reward_count)
         ]
-        agg_state_utxos = [
-            self._create_utxo_with_nft(
-                script_address,
-                deployment_config.token_names.aggstate,
-                mint_policy.policy_id,
-                AggState(price_data=PriceData.empty()),
-                "agg_state",
-            )
-            for _ in range(deployment_config.aggstate_count)
-        ]
+        # Multi-feed (D-05): if suffixes provided, each AggState UTxO carries
+        # a distinct token name `<aggstate><suffix>`. Otherwise vanilla
+        # `aggstate_count` UTxOs all carrying the shared base name.
+        if deployment_config.aggstate_asset_suffixes:
+            agg_state_utxos = [
+                self._create_utxo_with_nft(
+                    script_address,
+                    f"{deployment_config.token_names.aggstate}{suffix}",
+                    mint_policy.policy_id,
+                    AggState(price_data=PriceData.empty()),
+                    "agg_state",
+                )
+                for suffix in deployment_config.aggstate_asset_suffixes
+            ]
+        else:
+            agg_state_utxos = [
+                self._create_utxo_with_nft(
+                    script_address,
+                    deployment_config.token_names.aggstate,
+                    mint_policy.policy_id,
+                    AggState(price_data=PriceData.empty()),
+                    "agg_state",
+                )
+                for _ in range(deployment_config.aggstate_count)
+            ]
 
         # Add all outputs to builder
         builder.add_output(settings_utxo)
@@ -221,6 +236,7 @@ class OracleStartBuilder:
             deployment_config.token_names,
             reward_count=deployment_config.reward_count,
             aggstate_count=deployment_config.aggstate_count,
+            aggstate_asset_suffixes=deployment_config.aggstate_asset_suffixes,
         )
         builder.add_minting_script(
             script=mint_policy.contract,
@@ -353,8 +369,16 @@ class OracleStartBuilder:
         token_names: OracleTokenNames,
         reward_count: int,
         aggstate_count: int,
+        aggstate_asset_suffixes: list[str] | None = None,
     ) -> MultiAsset:
-        """Create MultiAsset for minting oracle NFTs."""
+        """Create MultiAsset for minting oracle NFTs.
+
+        Multi-feed (D-05): if `aggstate_asset_suffixes` is provided, mint
+        one token per suffix with name `<token_names.aggstate><suffix>`
+        instead of `aggstate_count` copies of the base name. Requires our
+        forked Charli3 validator which prefix-matches on
+        `token_names.aggstate`.
+        """
         mint_map = {
             token_names.core_settings.encode(): 1,
         }
@@ -363,7 +387,18 @@ class OracleStartBuilder:
             mint_map[token_names.reward_account.encode()] = reward_count
 
         if aggstate_count > 0:
-            mint_map[token_names.aggstate.encode()] = aggstate_count
+            if aggstate_asset_suffixes:
+                if len(aggstate_asset_suffixes) != aggstate_count:
+                    raise ValueError(
+                        f"aggstate_asset_suffixes length "
+                        f"({len(aggstate_asset_suffixes)}) must equal "
+                        f"aggstate_count ({aggstate_count})"
+                    )
+                for suffix in aggstate_asset_suffixes:
+                    full_name = f"{token_names.aggstate}{suffix}".encode()
+                    mint_map[full_name] = 1
+            else:
+                mint_map[token_names.aggstate.encode()] = aggstate_count
 
         return MultiAsset.from_primitive({policy_id: mint_map})
 

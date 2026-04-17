@@ -134,9 +134,12 @@ async def create(config: Path, force: bool) -> None:
 
         tx_manager = TransactionManager(chain_query)
 
-        # Create script config
+        # Create script config. 60 tADA (bumped from upstream's 53 tADA)
+        # to comfortably cover the larger reference-script-UTxO min-UTxO
+        # of our forked oracle_manager validator (which includes the
+        # prefix-matching branches — ~53.2 tADA needed).
         script_config = OracleScriptConfig(
-            create_manager_reference=True, reference_ada_amount=53000000
+            create_manager_reference=True, reference_ada_amount=60000000
         )
 
         # Check for existing script

@@ -22,6 +22,12 @@ class DeploymentConfig:
     nodes: NodesConfig
     reward_count: int = 1
     aggstate_count: int = 1
+    # c3-supply multi-feed (D-05): if non-empty, mints distinctly-named
+    # AggState tokens `<aggstate_token_name><suffix>` per entry instead of
+    # `aggstate_count` copies of the base name. len must equal
+    # `aggstate_count`. Our forked Charli3 validator accepts any name
+    # sharing the `aggstate_token_name` prefix.
+    aggstate_asset_suffixes: list[str] | None = None
     multi_sig: MultisigConfig | None = None
     blueprint_path: Path = Path("artifacts/plutus.json")
     use_aiken: bool = False
@@ -44,4 +50,5 @@ class DeploymentConfig:
             create_reference=data.get("create_reference", True),
             reward_count=data.get("reward_count", 1),
             aggstate_count=data.get("aggstate_count", 1),
+            aggstate_asset_suffixes=data.get("aggstate_asset_suffixes"),
         )

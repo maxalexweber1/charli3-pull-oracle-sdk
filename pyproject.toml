@@ -9,7 +9,8 @@ packages = [
 ]
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.12"
+# c3-supply fork: relaxed from `<3.12` — pycardano works on 3.13.
+python = ">=3.10,<3.14"
 opshin = "^0.24.4"
 pycardano = { git = "https://github.com/Charli3-Official/pycardano.git", branch = "fix/odv-multisig-v0.17.0-kupo-additions"}
 tabulate = "^0.9.0"

@@ -37,6 +37,10 @@ class OracleDeploymentConfig:
     aggstate_count: int
     disallow_less_than_four_nodes: bool | None = None
     token_names: OracleTokenNames | None = None
+    # c3-supply multi-feed (D-05): distinct suffixes appended to
+    # token_names.aggstate for each AggState UTxO, enabling multi-feed
+    # oracles under one policy. len must equal aggstate_count.
+    aggstate_asset_suffixes: list[str] | None = None
 
     def __post_init__(self) -> None:
         """Validate and set default configuration."""
