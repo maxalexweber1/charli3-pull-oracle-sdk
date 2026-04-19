@@ -14,6 +14,7 @@ from pycardano import (
     Redeemer,
     ScriptHash,
     Transaction,
+    TransactionInput,
     TransactionOutput,
     UTxO,
     VerificationKeyHash,
@@ -43,6 +44,7 @@ from charli3_offchain_core.models.oracle_redeemers import (
 from charli3_offchain_core.oracle.exceptions import (
     TransactionError,
 )
+from charli3_offchain_core import _chained_utxos
 from charli3_offchain_core.oracle.utils import (
     calc_methods,
     common,
@@ -61,6 +63,11 @@ class OdvResult:
     account_output: TransactionOutput
     agg_state_output: TransactionOutput
     sorted_required_signers: list[VerificationKeyHash]
+    # New RewardAccount UTxO produced by this tx — needed for tx-chaining
+    # when multiple feeds of the same oracle submit back-to-back (both must
+    # spend the shared C3RA UTxO; chaining lets Tx B consume Tx A's output
+    # without waiting for ledger confirmation).
+    new_reward_account_utxo: UTxO | None = None
 
 
 class OracleTransactionBuilder:
@@ -101,6 +108,7 @@ class OracleTransactionBuilder:
         signing_key: PaymentSigningKey | ExtendedSigningKey,
         change_address: Address | None = None,
         validity_window: ValidityWindow | None = None,
+        reward_account_utxo_override: UTxO | None = None,
     ) -> OdvResult:
         """Build ODV aggregation transaction with comprehensive validation.
 
@@ -109,6 +117,12 @@ class OracleTransactionBuilder:
             signing_key: Signing key for transaction
             change_address: Optional change address
             validity_window: Optional validity window
+            reward_account_utxo_override: Skip the on-chain lookup for the
+                RewardAccount (C3RA) UTxO and use the supplied one instead.
+                Used for tx-chaining across back-to-back feed aggregations:
+                Tx A produces `new_reward_account_utxo`, Tx B passes it here
+                and the ledger accepts both because B consumes A's output
+                directly. AggState (C3AS_*) lookup is unaffected.
 
         Returns:
             OdvResult containing transaction and outputs
@@ -178,6 +192,13 @@ class OracleTransactionBuilder:
                 current_time,
                 aggstate_asset_name=self.aggstate_asset_name,
             )
+            if reward_account_utxo_override is not None:
+                logger.debug(
+                    "Using chained RewardAccount override %s#%d (skipping on-chain account)",
+                    reward_account_utxo_override.input.transaction_id,
+                    reward_account_utxo_override.input.index,
+                )
+                account = reward_account_utxo_override
 
             # Don't re-sort! message.node_feeds_sorted_by_feed is already correctly
             # sorted by (feed_value, VKH) from build_aggregate_message
@@ -245,18 +266,32 @@ class OracleTransactionBuilder:
                 logger.warning("Failed to dump redeemer CBOR: %s", e)
 
             required_signers = sorted(sorted_feeds.keys(), key=lambda vkh: vkh.payload)
-            tx = await self.tx_manager.build_script_tx(
-                script_inputs=[
-                    (account, account_redeemer, script_utxo),
-                    (agg_state, aggstate_redeemer, script_utxo),
-                ],
-                script_outputs=[account_output, agg_state_output],
-                reference_inputs=reference_inputs,
-                required_signers=required_signers,
-                change_address=change_address,
-                signing_key=signing_key,
-                validity_start=validity_start_slot,
-                validity_end=validity_end_slot,
+            # If we're chaining off a not-yet-confirmed RewardAccount UTxO,
+            # register it thread-local so the node-fork's ogmios evaluate
+            # monkey-patch can forward it as additionalUtxo. Without this,
+            # Ogmios's script context can't resolve the virtual input and
+            # rejects with code 3010 ("Some scripts terminate").
+            if reward_account_utxo_override is not None:
+                _chained_utxos.register([reward_account_utxo_override])
+            try:
+                tx = await self.tx_manager.build_script_tx(
+                    script_inputs=[
+                        (account, account_redeemer, script_utxo),
+                        (agg_state, aggstate_redeemer, script_utxo),
+                    ],
+                    script_outputs=[account_output, agg_state_output],
+                    reference_inputs=reference_inputs,
+                    required_signers=required_signers,
+                    change_address=change_address,
+                    signing_key=signing_key,
+                    validity_start=validity_start_slot,
+                    validity_end=validity_end_slot,
+                )
+            finally:
+                _chained_utxos.clear()
+
+            new_reward_account_utxo = self._locate_new_reward_account_utxo(
+                tx, account_output
             )
 
             return OdvResult(
@@ -264,10 +299,44 @@ class OracleTransactionBuilder:
                 account_output,
                 agg_state_output,
                 sorted_required_signers=required_signers,
+                new_reward_account_utxo=new_reward_account_utxo,
             )
 
         except Exception as e:
             raise TransactionError(f"Failed to build ODV transaction: {e}") from e
+
+    def _locate_new_reward_account_utxo(
+        self, tx: Transaction, account_output: TransactionOutput
+    ) -> UTxO | None:
+        """Find the index of the newly produced RewardAccount (C3RA) output.
+
+        The builder places `account_output` first in `script_outputs`, so
+        in the normal case it ends up at index 0 of the tx body. We still
+        scan defensively: the first output at the script address holding
+        the policy's C3RA token is the RewardAccount.
+        """
+        try:
+            c3ra_name = AssetName(b"C3RA")
+            for idx, out in enumerate(tx.transaction_body.outputs):
+                if out.address != self.script_address:
+                    continue
+                if out.amount.multi_asset is None:
+                    continue
+                assets = out.amount.multi_asset.get(self.policy_id)
+                if assets is None:
+                    continue
+                if c3ra_name in assets:
+                    tx_input = TransactionInput(
+                        transaction_id=tx.id, index=idx
+                    )
+                    return UTxO(tx_input, out)
+            logger.warning(
+                "Could not locate new C3RA output in built tx — chaining disabled"
+            )
+            return None
+        except Exception as e:
+            logger.warning("Failed to extract new RewardAccount UTxO: %s", e)
+            return None
 
     def _create_reward_account_output(
         self,
